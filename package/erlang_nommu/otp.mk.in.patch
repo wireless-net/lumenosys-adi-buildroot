@@ -1,0 +1,11 @@
+--- otp_src_17.0/make/otp.mk.in.orig	2014-08-23 15:06:32.570859449 -0700
++++ otp_src_17.0/make/otp.mk.in	2014-08-23 15:07:44.798858059 -0700
+@@ -95,7 +95,7 @@
+   ifdef BOOTSTRAP
+     ERL_COMPILE_FLAGS += +slim
+   else
+-    ERL_COMPILE_FLAGS += +debug_info
++    ERL_COMPILE_FLAGS += +no_debug_info
+   endif
+ endif
+ ERLC_WFLAGS = -W

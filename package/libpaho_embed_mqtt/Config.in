@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBPAHO_EMBED_MQTT
+       bool "libpaho_embed_mqtt"
+       help
+	This package provides the Paho Embedded MQTT client library.
+	http://www.eclipse.org/paho/clients/c/embedded/

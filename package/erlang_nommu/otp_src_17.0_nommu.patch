@@ -1,0 +1,442 @@
+diff -uNr otp_src_17.0/erts/emulator/sys/unix/sys.c otp_src_17.0.port/erts/emulator/sys/unix/sys.c
+--- otp_src_17.0/erts/emulator/sys/unix/sys.c	2014-04-07 11:31:32.000000000 -0700
++++ otp_src_17.0.port/erts/emulator/sys/unix/sys.c	2014-05-29 12:23:19.000000000 -0700
+@@ -1430,6 +1430,8 @@
+ #ifndef QNX
+     int unbind;
+ #endif
++
++#ifndef __uClinux__
+ #if !DISABLE_VFORK
+     int no_vfork;
+     size_t no_vfork_sz = sizeof(no_vfork);
+@@ -1438,6 +1440,7 @@
+ 				    (char *) &no_vfork,
+ 				    &no_vfork_sz) >= 0);
+ #endif
++#endif
+ 
+     switch (opts->read_write) {
+     case DO_READ:
+@@ -1531,11 +1534,13 @@
+ 
+     unbind = erts_sched_bind_atfork_prepare();
+ 
++    /* if compiling for uclinux, we just remove this fork() code,
++     * since the fork() call isn't defined and will not link */
++#ifndef __uClinux__
+ #if !DISABLE_VFORK
+     /* See fork/vfork discussion before this function. */
+     if (no_vfork) {
+ #endif
+-
+ 	DEBUGF(("Using fork\n"));
+ 	pid = fork();
+ 
+@@ -1608,10 +1613,15 @@
+ 	child_error:
+ 	    _exit(1);
+ 	}
++
+ #if !DISABLE_VFORK
+     }
++    else
++#endif
++#endif	/* !__uClinux__ */
++#if !DISABLE_VFORK
+ #define ENOUGH_BYTES (44)
+-    else { /* Use vfork() */
++    { /* Use vfork() */
+ 	char **cs_argv= erts_alloc(ERTS_ALC_T_TMP,(CS_ARGV_NO_OF_ARGS + 1)*
+ 				   sizeof(char *));
+ 	char fd_close_range[ENOUGH_BYTES];                  /* 44 bytes are enough to  */
+@@ -1692,7 +1702,7 @@
+ 	erts_free(ERTS_ALC_T_TMP,cs_argv);
+     }
+ #undef ENOUGH_BYTES
+-#endif
++#endif	/* !DISABLE_VFORK */
+ 
+     erts_sched_bind_atfork_parent(unbind);
+ 
+diff -uNr otp_src_17.0/erts/epmd/src/epmd.c otp_src_17.0.port/erts/epmd/src/epmd.c
+--- otp_src_17.0/erts/epmd/src/epmd.c	2014-04-07 11:31:32.000000000 -0700
++++ otp_src_17.0.port/erts/epmd/src/epmd.c	2014-05-29 12:22:57.000000000 -0700
+@@ -32,7 +32,11 @@
+ /* forward declarations */
+ 
+ static void usage(EpmdVars *);
++#ifdef __uClinux__
++static void run_daemon(int argc, char**argv, EpmdVars*);
++#else
+ static void run_daemon(EpmdVars*);
++#endif
+ static char* get_addresses(void);
+ static int get_port_no(void);
+ static int check_relaxed(void);
+@@ -132,9 +136,18 @@
+ int main(int argc, char** argv)
+ #endif /* DONT_USE_MAIN */
+ {
++  /* UCLINUX PORT notes:
++   *                     
++   * For uclinux, we only have vfork. So to daemonize, we must save
++   * environment/args, and start ourselves as a child with a call to
++   * exec() passing these args.
++   */
++
+     EpmdVars g_empd_vars;
+     EpmdVars *g = &g_empd_vars;
+     int i;
++    int child_argc = argc;
++    char **child_argv = argv;
+ #ifdef __WIN32__
+     WORD wVersionRequested;
+     WSADATA wsaData;
+@@ -166,6 +179,9 @@
+ 
+     g->silent         = 0; 
+     g->is_daemon      = 0;
++#ifdef __uClinux__
++    g->is_child       = 0;
++#endif
+     g->brutal_kill    = check_relaxed();
+     g->packet_timeout = CLOSE_TIMEOUT; /* Default timeout */
+     g->delay_accept   = 0;
+@@ -205,8 +221,18 @@
+ 		usage(g);
+ 	    argv += 2; argc -= 2;
+ 	} else if (strcmp(argv[0], "-daemon") == 0) {
++#ifdef __uClinux__
++	    /* convert this to -child */
++	    strcpy(argv[0], "-child");
++#endif
+ 	    g->is_daemon = 1;
+ 	    argv++; argc--;
++#ifdef __uClinux__
++	} else if (strcmp(argv[0], "-child") == 0) {
++	    /* this is the child process */
++	    g->is_child = 1;          /* fixme: maybe not needed */
++	    argv++; argc--;
++#endif
+ 	} else if (strcmp(argv[0], "-relaxed_command_check") == 0) {
+ 	    g->brutal_kill = 1;
+ 	    argv++; argc--;
+@@ -276,7 +302,12 @@
+     }
+ 
+     if (g->is_daemon)  {
++#ifdef __uClinux__
++	run_daemon(child_argc, child_argv, g);
++
++#else
+ 	run_daemon(g);
++#endif
+     } else {
+ 	run(g);
+     }
+@@ -284,14 +315,23 @@
+ }
+ 
+ #ifndef NO_DAEMON
++#ifdef __uClinux__
++static void run_daemon(int child_argc, char** child_argv, EpmdVars *g)
++#else
+ static void run_daemon(EpmdVars *g)
++#endif
+ {
+     register int child_pid, fd;
+     
+     dbg_tty_printf(g,2,"fork a daemon");
+ 
++#ifdef __uClinux__
++    /* vfork, then exec a copy of ourselves */
++    if (( child_pid = vfork()) < 0)
++#else
+     /* fork to make sure first child is not a process group leader */
+     if (( child_pid = fork()) < 0)
++#endif
+       {
+ #ifdef HAVE_SYSLOG_H
+ 	syslog(LOG_ERR,"erlang mapper daemon cant fork %m");
+@@ -303,7 +343,7 @@
+ 	dbg_tty_printf(g,2,"daemon child is %d",child_pid);
+ 	epmd_cleanup_exit(g,0);  /*parent */
+       }
+-    
++#ifndef __uClinux__
+     if (setsid() < 0)
+       {
+ 	dbg_perror(g,"epmd: Cant setsid()");
+@@ -329,16 +369,22 @@
+ 	dbg_tty_printf(g,2,"daemon 2'nd child is %d",child_pid);
+ 	epmd_cleanup_exit(g,0);  /*parent */
+       }
++#endif	/* !__uClinux__ */
+ 
+     /* move cwd to root to make sure we are not on a mounted filesystem  */
+     if (chdir("/") < 0)
+       {
+ 	dbg_perror(g,"epmd: chdir() failed");
++#ifdef __uClinux__
++	_exit(1);
++#else	
+ 	epmd_cleanup_exit(g,1);
++#endif
+       }
+     
+     umask(0);
+ 
++    /* safe for uClinux ?? */
+     for (fd = 0; fd < g->max_conn ; fd++) /* close all files ... */
+         close(fd);
+     /* Syslog on linux will try to write to whatever if we dont
+@@ -353,7 +399,15 @@
+ 
+     errno = 0;  /* if set by open */
+ 
++#ifdef __uClinux__
++    execvp(child_argv[0], child_argv);
++
++    /* should never be reached */
++    dbg_perror(g,"epmd: execvp() failed");
++    _exit(-1);
++#else
+     run(g);
++#endif
+ }
+ 
+ #endif /* NO_DAEMON */    
+diff -uNr otp_src_17.0/erts/epmd/src/epmd_int.h otp_src_17.0.port/erts/epmd/src/epmd_int.h
+--- otp_src_17.0/erts/epmd/src/epmd_int.h	2014-04-07 11:31:32.000000000 -0700
++++ otp_src_17.0.port/erts/epmd/src/epmd_int.h	2014-05-29 12:22:29.000000000 -0700
+@@ -326,6 +326,9 @@
+   int debug;
+   int silent; 
+   int is_daemon;
++#ifdef __uClinux__
++  int is_child;                 /* uclinux support */
++#endif
+   int brutal_kill;
+   unsigned packet_timeout;
+   unsigned delay_accept;
+diff -uNr otp_src_17.0/erts/etc/common/erlexec.c otp_src_17.0.port/erts/etc/common/erlexec.c
+--- otp_src_17.0/erts/etc/common/erlexec.c	2014-04-07 11:31:32.000000000 -0700
++++ otp_src_17.0.port/erts/etc/common/erlexec.c	2014-05-29 12:22:17.000000000 -0700
+@@ -1080,13 +1080,19 @@
+ 
+  skip_arg_massage:
+     if (start_detached) {
++#ifdef __uClinux__
++	int status = vfork();
++	if (status != 0)	/* Parent */
++	    _exit(0);		/* after vfork, must _exit()! */
++#else
+ 	int status = fork();
+ 	if (status != 0)	/* Parent */
+ 	    return 0;
+-
++#endif
+ 	if (reset_cerl_detached)
+ 	    putenv("CERL_DETACHED_PROG=");
+ 
++#ifndef __uClinux__
+ 	/* Detach from controlling terminal */
+ #ifdef HAVE_SETSID
+ 	setsid();
+@@ -1103,7 +1109,7 @@
+ 	status = fork();
+ 	if (status != 0)	/* Parent */
+ 	    return 0;
+-
++#endif	/* !__uClinux__ */
+ 	/*
+ 	 * Grandchild.
+ 	 */
+diff -uNr otp_src_17.0/erts/etc/common/inet_gethost.c otp_src_17.0.port/erts/etc/common/inet_gethost.c
+--- otp_src_17.0/erts/etc/common/inet_gethost.c	2014-04-07 11:31:32.000000000 -0700
++++ otp_src_17.0.port/erts/etc/common/inet_gethost.c	2014-05-29 12:21:56.000000000 -0700
+@@ -444,6 +444,10 @@
+ 	    }
+ 	} else if(!strcmp(*ap, "-ng")) {
+ 	    disable_greedy = 1;
++#ifdef __uClinux__
++	} else if(!strcmp(*ap, "-w")) {
++	    return worker_loop();
++#endif
+ 	} else {
+ 	    x = atoi(*ap);
+ 	    if (!x) {
+@@ -1602,7 +1606,11 @@
+ 	close(p0[1]);
+ 	return -1;
+     }
++#ifdef __uClinux__
++    if ((child = vfork()) < 0) { /* failure */
++#else
+     if ((child = fork()) < 0) { /* failure */
++#endif
+ 	warning("Could not fork(), errno = %d",
+ 		errno);
+ 	close(p0[0]);
+@@ -1626,6 +1634,11 @@
+ 		  (long) pworker->pid, (int) pworker->readfrom));
+ 	return 0;
+     } else { /* child */
++#ifdef __uClinux__
++	char *args[2];
++	args[0] = program_name;
++	args[1] = "-w";
++#endif	    
+ 	close(p1[1]);
+ 	close(p0[0]);
+ 	close_all_worker_fds();
+@@ -1634,13 +1647,24 @@
+ 	if((dup2(p1[0],0) < 0) || (dup2(p0[1],1) < 0)) {
+ 	    fatal("Worker could not dup2(), errno = %d",
+ 		  errno);
++#ifdef __uClinux__
++	    _exit(-1); 		/* after vfork, must _exit()! */
++#else
+ 	    return -1; /* lint... */
++#endif
+ 	}
+ 	close(p1[0]);
+ 	close(p0[1]);
+ 	signal(SIGCHLD, SIG_IGN); 
++#ifdef __uClinux__
++	execlp(args[0], args[0], args[1], NULL);
++	fatal("Worker could not execlp(), strerr = %s, args = %s, %s",
++	      strerror(errno), args[0], args[1]);
++	_exit(-1); /* with vfork, must _exit() */
++#else
+ 	return worker_loop();
+-    }
++#endif
++   }
+ }
+ 
+ static void close_all_worker_fds(void) 
+diff -uNr otp_src_17.0/erts/etc/unix/run_erl.c otp_src_17.0.port/erts/etc/unix/run_erl.c
+--- otp_src_17.0/erts/etc/unix/run_erl.c	2014-04-07 11:31:32.000000000 -0700
++++ otp_src_17.0.port/erts/etc/unix/run_erl.c	2014-05-29 12:21:32.000000000 -0700
+@@ -187,14 +187,18 @@
+   /* 
+    * Now create a child process
+    */
+-
++#ifdef __uClinux__
++  if ((childpid = vfork()) < 0) {
++#else
+   if ((childpid = fork()) < 0) {
++#endif
+     ERRNO_ERR0(LOG_ERR,"Cannot fork");
+     exit(1);
+   }
+   if (childpid == 0) {
+     /* Child */
+     sf_close(mfd);
++#ifndef __uClinux__
+     /* disassociate from control terminal */
+ #ifdef USE_SETPGRP_NOARGS       /* SysV */
+     setpgrp();
+@@ -203,6 +207,7 @@
+ #else                           /* POSIX */
+     setsid();
+ #endif
++#endif
+     /* Open the slave pty */
+     if (sfd < 0) {
+ 	/* not allocated by open_pty_master */
+@@ -718,6 +723,9 @@
+       OPEN_SYSLOG();
+   }
+   ERRNO_ERR0(LOG_ERR,"Could not execv");
++#ifdef __uClinux__
++  _exit(-1);			/* after vfork, we must _exit()! */
++#endif
+ }
+ 
+ 
+@@ -727,8 +735,34 @@
+     pid_t pid;
+     int i, maxfd = HIGHEST_FILENO(); 
+ 
++#ifdef __uClinux__
++    if ((pid = vfork()) != 0)
++	_exit(-1);
++
++    if (pid == 0) {             /* child */
++      char *args[1];
++      args[0] = program_name;
++      
++      for (i = 0; i < maxfd; ++i ) {
++        sf_close(i);
++      }
++      
++      open("/dev/null", O_RDONLY); /* Order is important! */
++      open("/dev/null", O_WRONLY);
++      open("/dev/null", O_WRONLY);
++      
++      errno = 0;  /* if set by open */
++
++      execl(args[0], args[0], NULL);
++      printf("ERROR: execl failed: %s\n", strerror(errno));
++      _exit(-1);
++    } else {
++      exit(0);
++    }
++#else
+     if ((pid = fork()) != 0)
+ 	exit(0);
++
+ #if defined(USE_SETPGRP_NOARGS)
+     setpgrp();
+ #elif defined(USE_SETPGRP)
+@@ -757,6 +791,7 @@
+ 
+     OPEN_SYSLOG();
+     run_daemon = 1;
++#endif	/* !__uClinux__ */
+ }
+ 
+ static void usage(char *pname)
+diff -uNr otp_src_17.0/lib/erl_interface/src/prog/erl_start.c otp_src_17.0.port/lib/erl_interface/src/prog/erl_start.c
+--- otp_src_17.0/lib/erl_interface/src/prog/erl_start.c	2014-04-07 11:31:32.000000000 -0700
++++ otp_src_17.0.port/lib/erl_interface/src/prog/erl_start.c	2014-05-29 12:23:32.000000000 -0700
+@@ -88,9 +88,11 @@
+ #include "erl_start.h"
+ 
+ /* FIXME is this a case a vfork can be used? */
++#ifndef __uClinux__
+ #if !HAVE_WORKING_VFORK
+ # define vfork fork
+ #endif
++#endif
+ 
+ #ifndef MAXPATHLEN
+ #define MAXPATHLEN 1024
+@@ -196,7 +198,11 @@
+ #endif /* defined(VXWORKS) */
+   }
+ #else /* Unix */
++#ifdef __uClinux__
++  switch ((pid = vfork())) {
++#else
+   switch ((pid = fork())) {
++#endif
+   case -1:
+     r = ERL_SYS_ERROR;
+     break;
+@@ -207,7 +213,11 @@
+ 
+     /* error if reached - parent reports back to caller after timeout
+        so we just exit here */
++#ifdef __uClinux__
++    _exit(1);
++#else
+     exit(1);
++#endif
+     break;
+ 
+   default:

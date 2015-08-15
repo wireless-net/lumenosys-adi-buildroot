@@ -1,8 +1,8 @@
-################################################################################
+#############################################################
 #
 # pppd
 #
-################################################################################
+#############################################################
 
 PPPD_VERSION = 2.4.5
 PPPD_SOURCE = ppp-$(PPPD_VERSION).tar.gz
@@ -22,15 +22,6 @@ endif
 ifeq ($(BR2_INET_IPV6),y)
 	PPPD_MAKE_OPT += HAVE_INET6=y
 endif
-
-# pppd bundles some but not all of the needed kernel headers. The embedded
-# if_pppol2tp.h is unfortunately not compatible with kernel headers > 2.6.34,
-# and has been part of the kernel headers since 2.6.23, so drop it
-define PPPD_DROP_INTERNAL_IF_PPOL2TP_H
-	$(RM) $(@D)/include/linux/if_pppol2tp.h
-endef
-
-PPPD_POST_EXTRACT_HOOKS += PPPD_DROP_INTERNAL_IF_PPOL2TP_H
 
 define PPPD_CONFIGURE_CMDS
 	$(SED) 's/FILTER=y/#FILTER=y/' $(PPPD_DIR)/pppd/Makefile.linux
@@ -81,11 +72,8 @@ define PPPD_INSTALL_RADIUS
 endef
 endif
 
-define PPPD_INSTALL_TARGET_CMDS
-	for sbin in $(PPPD_TARGET_BINS); do \
-		$(INSTALL) -D $(PPPD_DIR)/$$sbin/$$sbin \
-			$(TARGET_DIR)/usr/sbin/$$sbin; \
-	done
+ifeq ($(BR2_PACKAGE_PPPD_PLUGIN),y)
+define PPPD_INSTALL_PLUGIN
 	$(INSTALL) -D $(PPPD_DIR)/pppd/plugins/minconn.so \
 		$(TARGET_DIR)/usr/lib/pppd/$(PPPD_VERSION)/minconn.so
 	$(INSTALL) -D $(PPPD_DIR)/pppd/plugins/passprompt.so \
@@ -104,7 +92,16 @@ define PPPD_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/lib/pppd/$(PPPD_VERSION)/openl2tp.so
 	$(INSTALL) -D $(PPPD_DIR)/pppd/plugins/pppol2tp/pppol2tp.so \
 		$(TARGET_DIR)/usr/lib/pppd/$(PPPD_VERSION)/pppol2tp.so
+endef
+endif
+
+define PPPD_INSTALL_TARGET_CMDS
+	for sbin in $(PPPD_TARGET_BINS); do \
+		$(INSTALL) -D $(PPPD_DIR)/$$sbin/$$sbin \
+			$(TARGET_DIR)/usr/sbin/$$sbin; \
+	done
 	$(PPPD_INSTALL_RADIUS)
+	$(PPPD_INSTALL_PLUGIN)
 	for m in $(PPPD_MANPAGES); do \
 		$(INSTALL) -m 644 -D $(PPPD_DIR)/$$m/$$m.8 \
 			$(TARGET_DIR)/usr/share/man/man8/$$m.8; \

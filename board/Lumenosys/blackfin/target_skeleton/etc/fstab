@@ -1,0 +1,5 @@
+# /etc/fstab: static file system information.
+#
+# <file system> <mount pt>     <type>	<options>         <dump> <pass>
+
+#192.168.0.1:/mnt/nfs /mnt/nfs nfs nfsvers=3,tcp,rsize=1024,wsize=1024,nolock      0       0

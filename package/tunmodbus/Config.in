@@ -1,0 +1,6 @@
+config BR2_PACKAGE_TUNMODBUS
+       bool "tunmodbus"
+       select BR2_PACKAGE_LIBMODBUS
+       help
+       tunmodbus provides IP tunneling over the industrial Modbus-RTU protocol. Using tunmodbus you can setup IP networks on-top of Modbus-RTU/RS485 for example. 
+       http://lumenosys.com

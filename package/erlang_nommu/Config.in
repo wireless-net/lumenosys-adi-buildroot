@@ -1,0 +1,30 @@
+config BR2_PACKAGE_ERLANG_NOMMU
+	bool "erlang_nommu"
+	depends on !BR2_USE_MMU # no fork() / uclinux
+	help
+	  Erlang is a programming language used to build massively scalable
+	  soft real-time systems with requirements on high availability.
+	  Some of its uses are in telecoms, banking, e-commerce, computer
+	  telephony and instant messaging. Erlang's runtime system has
+	  built-in support for concurrency, distribution and fault tolerance.
+
+	  This package provides a port of Erlang to run on uClinux (without an MMU).
+
+	  http://www.erlang.org
+	  http://lumenosys.com
+
+config BR2_PACKAGE_ERLANG_BF53X_OPTIMIZATIONS
+	bool "build erlang_nommu with optimizations for Blackfin processors"
+	depends on BR2_PACKAGE_ERLANG_NOMMU
+	help
+	    Build the erlang_nommu package with optimizations for
+	    better performance on the Analog Devices Blackfin BF53x
+	    processors
+
+
+config BR2_PACKAGE_ERLANG_DIRTY_SCHEDULERS
+	bool "build erlang_nommu with dirty scheduler support (experimental)"
+	depends on BR2_PACKAGE_ERLANG_NOMMU
+	help
+	    Build the erlang_nommu package with support for dirty
+	    schedulers (needed for dirty NIFs)
